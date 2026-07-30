@@ -32,6 +32,8 @@ def ensure_index(dimension: int):
         if not pc.has_index(name):
             from pinecone import ServerlessSpec
 
+            # With no explicit timeout the SDK polls until the index reports
+            # ready, which matters because a fresh index rejects writes.
             pc.create_index(
                 name=name,
                 dimension=dimension,
@@ -40,11 +42,6 @@ def ensure_index(dimension: int):
                     cloud=config.PINECONE_CLOUD, region=config.PINECONE_REGION
                 ),
             )
-            # Creation is async; the index rejects writes until it is ready.
-            for _ in range(60):
-                if pc.describe_index(name).status.get("ready"):
-                    break
-                time.sleep(1)
         _ready.add(name)
 
     return pc.Index(name)

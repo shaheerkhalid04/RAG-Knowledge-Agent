@@ -136,9 +136,9 @@ export default function InsightsPage() {
             </h2>
             <p className="mt-2 text-[13px] leading-relaxed text-ink-3">
               Mean milliseconds per stage across {data.queries} quer
-              {data.queries === 1 ? "y" : "ies"}. Generation almost always
-              dominates — which is why the Lab measures embedding width without
-              it.
+              {data.queries === 1 ? "y" : "ies"}. Which stage dominates depends
+              on where you are relative to the Pinecone region — network
+              round-trips often cost more than the model does.
             </p>
 
             <div className="panel mt-5 px-5 py-5">

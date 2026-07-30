@@ -65,14 +65,35 @@ def generate_answer(question: str, chunks: list[dict], model: str | None = None)
     return (response.choices[0].message.content or "").strip()
 
 
-JUDGE_PROMPT = """You audit whether an answer is supported by its sources.
+JUDGE_PROMPT = """You audit an ANSWER against the SOURCES it was supposed to be built from.
 
 Return ONLY minified JSON, no prose, no code fence, matching exactly:
 {"groundedness": <0-100>, "relevance": <0-100>, "unsupported_claims": ["..."]}
 
-groundedness: how much of the answer is directly supported by the sources.
-relevance: how well the answer addresses the question asked.
-unsupported_claims: at most three short quotes from the answer that the sources do not support. Empty array if none."""
+groundedness: what percentage of the ANSWER is directly supported by the SOURCES.
+relevance: how well the ANSWER addresses the QUESTION.
+unsupported_claims: up to three fragments copied VERBATIM FROM THE ANSWER that the SOURCES do not support.
+
+Rules for unsupported_claims:
+- Every string must appear word-for-word inside the ANSWER.
+- Never quote the SOURCES. Material that appears in the SOURCES but not in the ANSWER is not a claim and must be ignored.
+- Return [] if the ANSWER is fully supported."""
+
+
+def _verbatim_claims(claims: list, answer: str) -> list[str]:
+    """Keep only claims actually present in the answer.
+
+    Small judge models reliably invert this task and quote the sources back
+    instead, which would surface alarming and completely false warnings. A
+    substring check is a cheap, deterministic guard against that.
+    """
+    normalise = lambda text: " ".join(str(text).split()).lower()  # noqa: E731
+    haystack = normalise(answer)
+    return [
+        str(claim)
+        for claim in claims
+        if len(normalise(claim)) > 8 and normalise(claim) in haystack
+    ][:3]
 
 
 def judge_answer(question: str, answer: str, chunks: list[dict]) -> dict | None:
@@ -98,11 +119,12 @@ def judge_answer(question: str, answer: str, chunks: list[dict]) -> dict | None:
         raw = (response.choices[0].message.content or "").strip()
         raw = re.sub(r"^```(?:json)?|```$", "", raw).strip()
         parsed = json.loads(raw)
-        claims = parsed.get("unsupported_claims") or []
         return {
             "groundedness": max(0, min(100, int(parsed.get("groundedness", 0)))),
             "relevance": max(0, min(100, int(parsed.get("relevance", 0)))),
-            "unsupported_claims": [str(c) for c in claims][:3],
+            "unsupported_claims": _verbatim_claims(
+                parsed.get("unsupported_claims") or [], answer
+            ),
         }
     except Exception:
         return None

@@ -2,6 +2,20 @@
 
 import os
 
+# Next.js reads .env.local on its own; uvicorn does not. Load it here so the
+# documented local workflow works with one command. On Vercel this finds
+# nothing and the platform's environment variables are used unchanged.
+try:
+    from dotenv import load_dotenv
+
+    _ROOT = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    for _name in (".env.local", ".env"):
+        load_dotenv(os.path.join(_ROOT, _name), override=False)
+except ImportError:
+    pass
+
 # --- Credentials -----------------------------------------------------------
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "").strip()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -26,7 +40,10 @@ NS_LOGS = "logs"
 
 # --- Generation ------------------------------------------------------------
 CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-JUDGE_MODEL = os.environ.get("GROQ_JUDGE_MODEL", "llama-3.1-8b-instant")
+# Deliberately not an 8B model. Smaller judges score faithful answers as
+# ungrounded and quote the sources back as if they were claims, which makes the
+# audit worse than useless; gpt-oss-20b is stable on both directions.
+JUDGE_MODEL = os.environ.get("GROQ_JUDGE_MODEL", "openai/gpt-oss-20b")
 
 # --- Ingestion limits ------------------------------------------------------
 # Vercel serverless functions reject request bodies above ~4.5 MB.

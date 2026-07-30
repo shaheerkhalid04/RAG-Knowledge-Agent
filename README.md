@@ -43,7 +43,7 @@ Browser ──► Next.js (App Router, React 19)
         ▼                ▼
    Pinecone          Groq
    ├ embeddings      └ llama-3.3-70b  (generation)
-   ├ vector search      llama-3.1-8b  (audit / LLM-as-judge)
+   ├ vector search      gpt-oss-20b   (audit / LLM-as-judge)
    └ query log
 ```
 
@@ -71,6 +71,12 @@ it makes past queries semantically searchable.
 **Evaluation runs on every query, for free.** Grounding and coverage are lexical
 overlap measures computed locally in microseconds. The heavier LLM-as-judge pass
 is opt-in per query via the Audit toggle, because it costs a second round trip.
+
+**The judge is not an 8B model, and its output is verified.** Small judges fail
+this task in both directions: they score fully faithful answers as ungrounded,
+and they quote the *sources* back as if those were the answer's unsupported
+claims. Every flagged claim is therefore checked to be a verbatim substring of
+the answer before it is shown, and any that is not gets dropped.
 
 ---
 
@@ -124,7 +130,7 @@ Every value below has a working default; override in `.env.local` or in Vercel.
 | `EMBED_MODEL` | `llama-text-embed-v2` | Must support Matryoshka truncation for the Lab |
 | `EMBED_DIMENSION` | `1024` | Default index width |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Answer generation |
-| `GROQ_JUDGE_MODEL` | `llama-3.1-8b-instant` | Audit pass |
+| `GROQ_JUDGE_MODEL` | `openai/gpt-oss-20b` | Audit pass — see note below |
 | `CHUNK_SIZE` | `900` | Characters per chunk |
 | `CHUNK_OVERLAP` | `150` | Characters shared between neighbours |
 | `PINECONE_INDEX_PREFIX` | `rag-kb` | Indexes are `{prefix}-{dimension}` |
