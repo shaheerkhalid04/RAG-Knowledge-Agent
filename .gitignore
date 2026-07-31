@@ -43,8 +43,7 @@ __pycache__/
 # vercel
 .vercel
 
-# local tooling
-.claude/
+# editors
 .idea/
 .vscode/
 
