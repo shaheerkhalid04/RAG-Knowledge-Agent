@@ -5,6 +5,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { TrashIcon, UploadIcon } from "@/components/icons";
 import { Notice, PageHeader, Spinner, Stat } from "@/components/ui";
 import { useWorkspace } from "@/components/workspace";
+import { AdminToken } from "@/components/admin-token";
 import { api, formatBytes, formatMs, formatWhen } from "@/lib/api";
 import type { IngestResult } from "@/lib/types";
 
@@ -126,6 +127,8 @@ export default function SourcesPage() {
           sub={`${dimension}-dimensional`}
         />
       </div>
+
+      <AdminToken />
 
       {error && (
         <div className="mt-6">

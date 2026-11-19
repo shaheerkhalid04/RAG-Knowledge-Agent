@@ -5,6 +5,7 @@ route handlers. next.config.ts proxies that prefix to a local uvicorn during
 development and to this function in production.
 """
 
+import hmac
 import os
 import sys
 import time
@@ -13,7 +14,7 @@ import time
 # helper package needs to be importable by name.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 
 from _lib import chunking, config, embeddings, evaluate, extract, llm, store
@@ -31,6 +32,21 @@ def _dimension(value: int) -> int:
     return value
 
 
+def _collection(value: str | None) -> str:
+    name = (value or "chunks").strip() or "chunks"
+    if name not in config.COLLECTIONS:
+        raise HTTPException(400, f"Unknown collection {name!r}. Choose one of {list(config.COLLECTIONS)}.")
+    return name
+
+
+def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
+    """Every write needs the admin token. Without ADMIN_TOKEN configured, writes are off."""
+    if not config.ADMIN_TOKEN:
+        raise HTTPException(503, "Writes are disabled: ADMIN_TOKEN is not configured on this deployment.")
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, config.ADMIN_TOKEN):
+        raise HTTPException(401, "This action needs the admin token.")
+
+
 @app.exception_handler(PineconeCredentials)
 @app.exception_handler(llm.MissingCredentials)
 async def _credentials_handler(_request, exc):
@@ -42,10 +58,14 @@ async def _credentials_handler(_request, exc):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/py/health")
-def health():
+def health(verify: bool = Query(False)):
+    """Configuration and index status. With ?verify=1 it also makes a real, tiny model call
+    and reports { ok, model, latency_ms }, so a retired model shows up as not ok."""
     missing = config.missing_credentials()
     payload = {
         "ok": not missing,
+        "model": config.CHAT_MODEL,
+        "writes_enabled": bool(config.ADMIN_TOKEN),
         "missing_credentials": missing,
         "embed_model": config.EMBED_MODEL,
         "chat_model": config.CHAT_MODEL,
@@ -62,6 +82,17 @@ def health():
         except Exception as exc:  # noqa: BLE001
             payload["ok"] = False
             payload["detail"] = str(exc)
+    if verify:
+        if missing:
+            payload["ok"] = False
+        else:
+            try:
+                result = llm.verify()
+                payload["latency_ms"] = result["latency_ms"]
+            except Exception as exc:  # noqa: BLE001
+                payload["ok"] = False
+                payload["verify_error"] = type(exc).__name__
+                payload["detail"] = str(exc)[:300]
     return payload
 
 
@@ -70,9 +101,12 @@ def health():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/py/documents")
-def list_documents(dimension: int = Query(config.DEFAULT_DIMENSION)):
+def list_documents(
+    dimension: int = Query(config.DEFAULT_DIMENSION),
+    collection: str = Query("chunks"),
+):
     dim = _dimension(dimension)
-    documents = store.list_documents(dim)
+    documents = store.list_documents(dim, _collection(collection))
     return {
         "documents": documents,
         "dimension": dim,
@@ -81,12 +115,14 @@ def list_documents(dimension: int = Query(config.DEFAULT_DIMENSION)):
     }
 
 
-@app.post("/api/py/documents")
+@app.post("/api/py/documents", dependencies=[Depends(require_admin)])
 async def add_document(
     file: UploadFile = File(...),
     dimension: int = Form(config.DEFAULT_DIMENSION),
+    collection: str = Form("chunks"),
 ):
     dim = _dimension(dimension)
+    target = _collection(collection)
     started = time.perf_counter()
 
     data = await file.read()
@@ -121,6 +157,7 @@ async def add_document(
     doc_id = store.new_document_id()
     upsert_started = time.perf_counter()
     store.store_document(
+        collection=target,
         dimension=dim,
         doc_id=doc_id,
         filename=file.filename or "document",
@@ -157,10 +194,14 @@ async def add_document(
     }
 
 
-@app.delete("/api/py/documents/{doc_id}")
-def remove_document(doc_id: str, dimension: int = Query(config.DEFAULT_DIMENSION)):
+@app.delete("/api/py/documents/{doc_id}", dependencies=[Depends(require_admin)])
+def remove_document(
+    doc_id: str,
+    dimension: int = Query(config.DEFAULT_DIMENSION),
+    collection: str = Query("chunks"),
+):
     dim = _dimension(dimension)
-    removed = store.delete_document(dim, doc_id)
+    removed = store.delete_document(dim, doc_id, _collection(collection))
     return {"id": doc_id, "removed_chunks": removed, "dimension": dim}
 
 
@@ -177,7 +218,10 @@ def run_query(body: dict = Body(...)):
     dim = _dimension(int(body.get("dimension") or config.DEFAULT_DIMENSION))
     top_k = max(1, min(20, int(body.get("top_k") or 5)))
     audit = bool(body.get("audit"))
-    model = body.get("model") or config.CHAT_MODEL
+    # The model is never taken from the request: visitors cannot choose what runs.
+    model = config.CHAT_MODEL
+    # "namespace" is accepted as an alias so the portfolio can ask the portfolio collection.
+    collection = _collection(body.get("collection") or body.get("namespace"))
 
     started = time.perf_counter()
 
@@ -186,7 +230,7 @@ def run_query(body: dict = Body(...)):
     embed_ms = (time.perf_counter() - embed_started) * 1000
 
     retrieve_started = time.perf_counter()
-    chunks = store.search(dim, query_vector, top_k)
+    chunks = store.search(dim, query_vector, top_k, collection)
     retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
     generate_started = time.perf_counter()
@@ -221,8 +265,14 @@ def run_query(body: dict = Body(...)):
         "dimension": dim,
         "top_k": top_k,
         "model": model,
+        "collection": collection,
         "ts": int(time.time() * 1000),
     }
+
+    # Questions asked through the portfolio stay out of the public query log.
+    if collection != "chunks":
+        result["log_id"] = None
+        return result
 
     try:
         # Logged with a trimmed source list — the dashboard only needs scores.
@@ -255,7 +305,7 @@ def logs(dimension: int = Query(config.DEFAULT_DIMENSION), limit: int = Query(50
     return {"logs": store.read_logs(dim)[: max(1, min(250, limit))], "dimension": dim}
 
 
-@app.delete("/api/py/logs")
+@app.delete("/api/py/logs", dependencies=[Depends(require_admin)])
 def wipe_logs(dimension: int = Query(config.DEFAULT_DIMENSION)):
     dim = _dimension(dimension)
     return {"removed": store.clear_logs(dim), "dimension": dim}
@@ -414,7 +464,7 @@ def lab_compare(body: dict = Body(...)):
     return {"query": question, "top_k": top_k, "runs": runs}
 
 
-@app.post("/api/py/lab/reindex")
+@app.post("/api/py/lab/reindex", dependencies=[Depends(require_admin)])
 def lab_reindex(body: dict = Body(...)):
     """Re-embed an existing knowledge base at a different dimension.
 

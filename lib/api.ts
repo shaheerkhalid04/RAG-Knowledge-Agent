@@ -11,6 +11,32 @@ import type {
 
 const BASE = "/api/py";
 
+// Writes (upload, delete, clearing logs, reindex) need the admin token. It is kept only in
+// this browser, entered on the Sources page, and sent as a header; it is never in the bundle.
+const ADMIN_KEY = "archivist-admin-token";
+
+export function getAdminToken(): string {
+  try {
+    return window.localStorage.getItem(ADMIN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setAdminToken(value: string): void {
+  try {
+    if (value) window.localStorage.setItem(ADMIN_KEY, value);
+    else window.localStorage.removeItem(ADMIN_KEY);
+  } catch {
+    /* private mode: the token just will not persist */
+  }
+}
+
+function adminHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAdminToken();
+  return { ...(extra ?? {}), ...(token ? { "x-admin-token": token } : {}) };
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -62,13 +88,17 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     form.append("dimension", String(dimension));
-    return request<IngestResult>("/documents", { method: "POST", body: form });
+    return request<IngestResult>("/documents", {
+      method: "POST",
+      body: form,
+      headers: adminHeaders(),
+    });
   },
 
   removeDocument: (id: string, dimension: number) =>
     request<{ removed_chunks: number }>(
       `/documents/${id}?dimension=${dimension}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: adminHeaders() },
     ),
 
   query: (payload: {
@@ -92,6 +122,7 @@ export const api = {
   clearLogs: (dimension: number) =>
     request<{ removed: number }>(`/logs?dimension=${dimension}`, {
       method: "DELETE",
+      headers: adminHeaders(),
     }),
 
   compare: (payload: {
@@ -108,7 +139,7 @@ export const api = {
   reindex: (source: number, target: number) =>
     request<ReindexResult>("/lab/reindex", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ source, target }),
     }),
 };

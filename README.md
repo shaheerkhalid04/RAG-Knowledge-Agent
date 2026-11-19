@@ -125,11 +125,16 @@ limited to 4 MB per file. The UI enforces this before sending.
 
 Every value below has a working default; override in `.env.local` or in Vercel.
 
+Health: `GET /api/py/health?verify=1` makes a real, tiny model call and returns `ok`, `model` and `latency_ms`, so a retired or misconfigured model shows up as not ok.
+
+Collections: `POST /api/py/query` accepts an optional `namespace` (`chunks` or `portfolio`) and always uses `GROQ_MODEL`; a `model` in the request is ignored. Questions to the `portfolio` collection are not written to the query log. Fill it with `scripts/ingest_portfolio.py`.
+
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `EMBED_MODEL` | `llama-text-embed-v2` | Must support Matryoshka truncation for the Lab |
 | `EMBED_DIMENSION` | `1024` | Default index width |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Answer generation |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Answer generation. Groq retired `llama-3.3-70b-versatile` on 16 Aug 2026 |
+| `ADMIN_TOKEN` | unset | Required for uploads, deletes, clearing logs and reindexing, sent as `x-admin-token`. Unset means writes are off |
 | `GROQ_JUDGE_MODEL` | `openai/gpt-oss-20b` | Audit pass — see note below |
 | `CHUNK_SIZE` | `900` | Characters per chunk |
 | `CHUNK_OVERLAP` | `150` | Characters shared between neighbours |

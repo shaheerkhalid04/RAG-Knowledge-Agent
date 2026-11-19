@@ -19,6 +19,8 @@ except ImportError:
 # --- Credentials -----------------------------------------------------------
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "").strip()
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+# Required for every write (upload, delete, log wipe, reindex). Unset means writes are off.
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "").strip()
 
 # --- Embeddings ------------------------------------------------------------
 # Pinecone hosts the embedding model, so no third embedding provider/key is
@@ -38,8 +40,22 @@ NS_CHUNKS = "chunks"
 NS_REGISTRY = "registry"
 NS_LOGS = "logs"
 
+# A collection is a pair of namespaces (chunks, registry) in the same index. "chunks" is the
+# original corpus. "portfolio" holds the CV and project READMEs that the portfolio's Ask box
+# queries; it is never written to the public query log.
+COLLECTIONS = {
+    "chunks": (NS_CHUNKS, NS_REGISTRY),
+    "portfolio": ("portfolio", "portfolio-registry"),
+}
+
+
+def namespaces(collection: str) -> tuple[str, str]:
+    if collection not in COLLECTIONS:
+        raise ValueError(f"Unknown collection {collection!r}. Choose one of {list(COLLECTIONS)}.")
+    return COLLECTIONS[collection]
+
 # --- Generation ------------------------------------------------------------
-CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+CHAT_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 # Deliberately not an 8B model. Smaller judges score faithful answers as
 # ungrounded and quote the sources back as if they were claims, which makes the
 # audit worse than useless; gpt-oss-20b is stable on both directions.
