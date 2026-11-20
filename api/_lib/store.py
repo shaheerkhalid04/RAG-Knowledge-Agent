@@ -77,8 +77,10 @@ def store_document(
     chunk_vectors: list[list[float]],
     summary_vector: list[float],
     meta: dict,
+    collection: str = "chunks",
 ) -> None:
     index = ensure_index(dimension)
+    ns_chunks, ns_registry = config.namespaces(collection)
 
     records = [
         {
@@ -96,11 +98,11 @@ def store_document(
 
     # Batch upserts so a large document does not exceed the request size limit.
     for start in range(0, len(records), 100):
-        index.upsert(vectors=records[start : start + 100], namespace=config.NS_CHUNKS)
+        index.upsert(vectors=records[start : start + 100], namespace=ns_chunks)
 
     index.upsert(
         vectors=[{"id": doc_id, "values": summary_vector, "metadata": meta}],
-        namespace=config.NS_REGISTRY,
+        namespace=ns_registry,
     )
 
 
@@ -118,18 +120,19 @@ def _all_ids(index, namespace: str, prefix: str | None = None) -> list[str]:
     return ids
 
 
-def list_documents(dimension: int) -> list[dict]:
+def list_documents(dimension: int, collection: str = "chunks") -> list[dict]:
     if not index_exists(dimension):
         return []
     index = ensure_index(dimension)
+    _, ns_registry = config.namespaces(collection)
 
-    ids = _all_ids(index, config.NS_REGISTRY)
+    ids = _all_ids(index, ns_registry)
     if not ids:
         return []
 
     documents: list[dict] = []
     for start in range(0, len(ids), 100):
-        fetched = index.fetch(ids=ids[start : start + 100], namespace=config.NS_REGISTRY)
+        fetched = index.fetch(ids=ids[start : start + 100], namespace=ns_registry)
         vectors = getattr(fetched, "vectors", None) or {}
         for doc_id, record in vectors.items():
             meta = dict(getattr(record, "metadata", None) or {})
@@ -140,20 +143,21 @@ def list_documents(dimension: int) -> list[dict]:
     return documents
 
 
-def document_chunk_texts(dimension: int, doc_id: str) -> list[str]:
+def document_chunk_texts(dimension: int, doc_id: str, collection: str = "chunks") -> list[str]:
     """Recover a document's chunk text straight from vector metadata.
 
     This is what lets the Lab re-index a corpus at another dimension without
     asking the user to re-upload anything.
     """
     index = ensure_index(dimension)
-    ids = _all_ids(index, config.NS_CHUNKS, prefix=f"{doc_id}#")
+    ns_chunks, _ = config.namespaces(collection)
+    ids = _all_ids(index, ns_chunks, prefix=f"{doc_id}#")
     if not ids:
         return []
 
     ordered: list[tuple[int, str]] = []
     for start in range(0, len(ids), 100):
-        fetched = index.fetch(ids=ids[start : start + 100], namespace=config.NS_CHUNKS)
+        fetched = index.fetch(ids=ids[start : start + 100], namespace=ns_chunks)
         vectors = getattr(fetched, "vectors", None) or {}
         for record in vectors.values():
             meta = dict(getattr(record, "metadata", None) or {})
@@ -165,15 +169,16 @@ def document_chunk_texts(dimension: int, doc_id: str) -> list[str]:
     return [text for _, text in ordered]
 
 
-def delete_document(dimension: int, doc_id: str) -> int:
+def delete_document(dimension: int, doc_id: str, collection: str = "chunks") -> int:
     """Remove a document's registry entry and every chunk vector it produced."""
     index = ensure_index(dimension)
+    ns_chunks, ns_registry = config.namespaces(collection)
 
-    chunk_ids = _all_ids(index, config.NS_CHUNKS, prefix=f"{doc_id}#")
+    chunk_ids = _all_ids(index, ns_chunks, prefix=f"{doc_id}#")
     for start in range(0, len(chunk_ids), 500):
-        index.delete(ids=chunk_ids[start : start + 500], namespace=config.NS_CHUNKS)
+        index.delete(ids=chunk_ids[start : start + 500], namespace=ns_chunks)
 
-    index.delete(ids=[doc_id], namespace=config.NS_REGISTRY)
+    index.delete(ids=[doc_id], namespace=ns_registry)
     return len(chunk_ids)
 
 
@@ -195,15 +200,16 @@ def count_chunks(dimension: int) -> int:
 # Retrieval
 # --------------------------------------------------------------------------
 
-def search(dimension: int, vector: list[float], top_k: int) -> list[dict]:
+def search(dimension: int, vector: list[float], top_k: int, collection: str = "chunks") -> list[dict]:
     if not index_exists(dimension):
         return []
     index = ensure_index(dimension)
+    ns_chunks, _ = config.namespaces(collection)
     response = index.query(
         vector=vector,
         top_k=top_k,
         include_metadata=True,
-        namespace=config.NS_CHUNKS,
+        namespace=ns_chunks,
     )
     matches = getattr(response, "matches", None) or []
 

@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 
 from . import config
 
@@ -23,6 +24,26 @@ def client():
 
         _client = Groq(api_key=config.GROQ_API_KEY)
     return _client
+
+
+def reasoning_kwargs(model: str) -> dict:
+    """gpt-oss models reason before answering, and those tokens count against max_tokens.
+    Low effort keeps answers fast and inside the budget. Sent as extra_body so it works on
+    every groq SDK version; other models get nothing extra."""
+    return {"extra_body": {"reasoning_effort": "low"}} if model.startswith("openai/gpt-oss") else {}
+
+
+def verify() -> dict:
+    """A real, tiny call to the chat model, so health checks prove the model answers
+    (a retired model returns 404 here even when the API key is fine)."""
+    started = time.perf_counter()
+    client().chat.completions.create(
+        model=config.CHAT_MODEL,
+        max_tokens=16,
+        messages=[{"role": "user", "content": "Reply with OK."}],
+        **reasoning_kwargs(config.CHAT_MODEL),
+    )
+    return {"ok": True, "model": config.CHAT_MODEL, "latency_ms": round((time.perf_counter() - started) * 1000, 1)}
 
 
 SYSTEM_PROMPT = """You are a retrieval-grounded research assistant.
@@ -50,10 +71,13 @@ def generate_answer(question: str, chunks: list[dict], model: str | None = None)
             "Add a document in Sources and ask again."
         )
 
+    chosen = model or config.CHAT_MODEL
     response = client().chat.completions.create(
-        model=model or config.CHAT_MODEL,
+        model=chosen,
         temperature=0.2,
-        max_tokens=1200,
+        # Headroom for gpt-oss reasoning tokens, which count against this limit.
+        max_tokens=1800,
+        **reasoning_kwargs(chosen),
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -103,7 +127,8 @@ def judge_answer(question: str, answer: str, chunks: list[dict]) -> dict | None:
         response = client().chat.completions.create(
             model=config.JUDGE_MODEL,
             temperature=0,
-            max_tokens=400,
+            max_tokens=700,
+            **reasoning_kwargs(config.JUDGE_MODEL),
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": JUDGE_PROMPT},
